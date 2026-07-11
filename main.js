@@ -43,13 +43,14 @@ let allyAimErr = { x: 0, z: 0 };
 let waitingServe = false;
 let tick = 0;
 let rallyLen = 0; // このラリーでボールがネットを越えた回数
+let lastToucher = null; // 同じキャラは連続でボールに触れない
 
 const keys = {};
 window.addEventListener('keydown', (e) => {
   if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space', 'Enter'].includes(e.code)) e.preventDefault();
   keys[e.code] = true;
   if (state === STATE.TITLE) startGame();
-  else if (state === STATE.PLAYING && waitingServe) waitingServe = false;
+  else if (state === STATE.PLAYING && waitingServe && e.code === 'Enter') waitingServe = false;
   else if (state === STATE.GAMEOVER && e.code === 'KeyR') state = STATE.TITLE;
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
@@ -115,7 +116,8 @@ function beginServe() {
   ball.held = true;
   serveTimer = 60;
   rallyLen = 0;
-  waitingServe = true; // 任意キーが押されるまでサーブ前で待機
+  lastToucher = null;
+  waitingServe = true; // Enter(サーブボタン)が押されるまで待機
 }
 
 function launchServe() {
@@ -124,12 +126,13 @@ function launchServe() {
   const T = 76 - level * 2;
   aimAt(dir * (120 + Math.random() * 140), (Math.random() * 2 - 1) * 120, T);
   ball.held = false;
+  lastToucher = teams[serveSide][0];
 }
 
 // CPUの落下点の読み違い。相手の攻撃が来るたびに引き直す（レベルが上がるほど正確）。
 // ラリーが長引くほど乱れて、勝負が必ず決着するようにする
 function rollCpuErr() {
-  const mag = 48 - difficultyLevel() * 11 + rallyLen * 1.5;
+  const mag = 42 - difficultyLevel() * 10 + rallyLen * 1.5;
   cpuAimErr = { x: (Math.random() * 2 - 1) * mag, z: (Math.random() * 2 - 1) * mag };
 }
 
@@ -169,10 +172,10 @@ const CHAR_GRAVITY = 0.7;
 function updatePlayer() {
   const p = controlled();
   p.vx = 0; p.vz = 0;
-  if (keys['ArrowLeft'] || keys['KeyA']) p.vx = -PLAYER_SPEED;
-  if (keys['ArrowRight'] || keys['KeyD']) p.vx = PLAYER_SPEED;
-  if (keys['ArrowUp'] || keys['KeyW']) p.vz = PLAYER_SPEED;
-  if (keys['ArrowDown'] || keys['KeyS']) p.vz = -PLAYER_SPEED;
+  if (keys['ArrowLeft']) p.vx = -PLAYER_SPEED;
+  if (keys['ArrowRight']) p.vx = PLAYER_SPEED;
+  if (keys['ArrowUp']) p.vz = PLAYER_SPEED;
+  if (keys['ArrowDown']) p.vz = -PLAYER_SPEED;
   const jumpKey = keys['Space'];
   if (jumpKey && p.onGround) {
     p.vy = JUMP_VELOCITY;
@@ -180,8 +183,8 @@ function updatePlayer() {
   }
   applyCharPhysics(p, 'player');
 
-  // Enterでヒット。接触中にジャンプ入力でも打ち返せる
-  if (!ball.held && p.hitCooldown === 0 && (keys['Enter'] || jumpKey) && nearBall(p, 18)) {
+  // Sでヒット。接触中にジャンプ入力でも打ち返せる
+  if (!ball.held && p.hitCooldown === 0 && (keys['KeyS'] || jumpKey) && nearBall(p, 18)) {
     performHit(p);
   }
 }
@@ -200,7 +203,10 @@ function updateCpuTeam() {
       z: clamp(landing.z + err.z, 15, WALL_Z - CHAR_R),
     };
   }
-  const chaser = landing !== null ? nearestChar(teams.cpu, landing) : null;
+  // 直前に触ったキャラは連続で触れないので追いかけ役から外す
+  const chaser = landing !== null
+    ? nearestChar(teams.cpu.filter((c) => c !== lastToucher), landing)
+    : null;
 
   for (const c of teams.cpu) {
     const isChaser = c === chaser;
@@ -229,10 +235,11 @@ function updateAllies() {
       z: clamp(landing.z + allyAimErr.z, -WALL_Z + CHAR_R, -15),
     };
   }
-  // 落下点が操作プレイヤーの近くなら味方は譲る（プレイヤーのボール）
+  // 落下点が操作プレイヤーの近くなら味方は譲る（プレイヤーのボール）。
+  // ただし操作プレイヤーが直前に触った場合は連続で触れないので味方が拾う
   let chaser = null;
-  if (landing !== null && Math.hypot(landing.x - pc.x, landing.z - pc.z) > 90) {
-    chaser = nearestChar(teams.player.filter((c) => c !== pc), landing);
+  if (landing !== null && (pc === lastToucher || Math.hypot(landing.x - pc.x, landing.z - pc.z) > 90)) {
+    chaser = nearestChar(teams.player.filter((c) => c !== pc && c !== lastToucher), landing);
   }
   for (const c of teams.player) {
     if (c === pc) continue;
@@ -319,6 +326,7 @@ function applyCharPhysics(c, side) {
 // スパイクはジャンプ中(空中)でなければ打てない。
 function performHit(c) {
   const side = c.side;
+  if (c === lastToucher) return; // 同じキャラは連続で触れない
   if (touches[side] >= MAX_TOUCHES) {
     awardPoint(opponent(side)); // オーバータッチ
     return;
@@ -326,6 +334,7 @@ function performHit(c) {
   const isSpike = touches[side] === MAX_TOUCHES - 1;
   if (isSpike && c.onGround) return; // 3回目はジャンプしないと返せない
   touches[side]++;
+  lastToucher = c;
   const dir = side === 'player' ? 1 : -1;
   const level = difficultyLevel();
   if (isSpike) {
@@ -368,7 +377,7 @@ function updateBall() {
     touches[sideNow] = 0;
     rallyLen++;
     if (sideNow === 'cpu') rollCpuErr();
-    else allyAimErr = { x: (Math.random() * 2 - 1) * 30, z: (Math.random() * 2 - 1) * 30 };
+    else allyAimErr = { x: (Math.random() * 2 - 1) * 34, z: (Math.random() * 2 - 1) * 34 };
   }
 
   // ground -> point
@@ -615,7 +624,7 @@ function drawServeLabel() {
   if (waitingServe) {
     ctx.fillStyle = `rgba(255,255,255,${0.55 + 0.45 * Math.sin(tick * 0.1)})`;
     ctx.font = '16px sans-serif';
-    ctx.fillText('press any key', W / 2, 118);
+    ctx.fillText('Enter でサーブ開始', W / 2, 118);
   }
 }
 
@@ -627,8 +636,8 @@ function drawTitle() {
   ctx.font = 'bold 42px sans-serif';
   ctx.fillText('ブラウザ・バレーボール 3 vs 3', W / 2, H / 2 - 80);
   ctx.font = '18px sans-serif';
-  ctx.fillText('← → ↑ ↓ / W A S D : 移動    Space : ジャンプ    Enter : 打つ', W / 2, H / 2 - 20);
-  ctx.fillText('緑の▽のキャラを操作。2回つないで、3回目はジャンプスパイクで返そう', W / 2, H / 2 + 10);
+  ctx.fillText('← → ↑ ↓ : 移動    Space : ジャンプ    S : 打つ    Enter : サーブ', W / 2, H / 2 - 20);
+  ctx.fillText('3タッチ目はジャンプスパイクで返す。同じキャラは連続で触れない', W / 2, H / 2 + 10);
   ctx.fillText(`先に ${WIN_SCORE} 点取ったら勝ち`, W / 2, H / 2 + 40);
   ctx.font = 'bold 22px sans-serif';
   ctx.fillText('press any key to start', W / 2, H / 2 + 95);
