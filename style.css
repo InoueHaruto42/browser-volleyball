@@ -1,0 +1,15 @@
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #1b1b1b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: "Hiragino Sans", "Helvetica Neue", Arial, sans-serif;
+}
+
+#game {
+  background: #2f6b2f;
+  box-shadow: 0 0 24px rgba(0, 0, 0, 0.6);
+  cursor: default;
+}
