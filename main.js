@@ -39,12 +39,15 @@ let winner = null;
 let lastBallSide = 'player';
 let cpuReactTimer = 0;
 let cpuAimErr = { x: 0, z: 0 };
+let waitingServe = false;
+let tick = 0;
 
 const keys = {};
 window.addEventListener('keydown', (e) => {
   if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space', 'Enter'].includes(e.code)) e.preventDefault();
   keys[e.code] = true;
   if (state === STATE.TITLE) startGame();
+  else if (state === STATE.PLAYING && waitingServe) waitingServe = false;
   else if (state === STATE.GAMEOVER && e.code === 'KeyR') state = STATE.TITLE;
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
@@ -109,12 +112,13 @@ function beginServe() {
   ball.vx = 0; ball.vy = 0; ball.vz = 0;
   ball.held = true;
   serveTimer = 60;
+  waitingServe = true; // 任意キーが押されるまでサーブ前で待機
 }
 
 function launchServe() {
   const dir = serveSide === 'player' ? 1 : -1;
   const level = difficultyLevel();
-  const T = 55 - level * 2;
+  const T = 66 - level * 2;
   aimAt(dir * (120 + Math.random() * 140), (Math.random() * 2 - 1) * 120, T);
   ball.held = false;
 }
@@ -304,7 +308,7 @@ function performHit(c, mode) {
     ball.vz = dir * 2.5;
     ball.vy = 12 + level * 0.2;
   } else {
-    const T = 45 - level * 3;
+    const T = 56 - level * 3;
     aimAt(dir * (60 + Math.random() * 200), (Math.random() * 2 - 1) * 140, T);
   }
   c.hitCooldown = 12;
@@ -365,7 +369,7 @@ function awardPoint(side) {
 
 // --- Main loop --------------------------------------------------------------
 function update() {
-  if (state !== STATE.PLAYING) return;
+  if (state !== STATE.PLAYING || waitingServe) return;
 
   updatePlayer();
   updateCpuTeam();
@@ -393,6 +397,8 @@ function draw() {
     drawTitle();
     return;
   }
+
+  drawLandingMarker();
 
   // 奥(CPU)チーム → ネット奥のボール → ネット → ネット手前のボール → 手前チーム
   const farChars = teams.cpu.slice().sort((a, b) => b.z - a.z);
@@ -503,6 +509,24 @@ function drawNet() {
   ctx.lineWidth = 1;
 }
 
+// ボールの予測落下地点を明滅するリングで示す
+function drawLandingMarker() {
+  if (ball.held || state !== STATE.PLAYING) return;
+  const lp = predictLanding('player') || predictLanding('cpu');
+  if (!lp) return;
+  const p = proj(lp.x, 0, lp.z);
+  const pulse = 0.5 + 0.5 * Math.sin(tick * 0.18);
+  const r = (16 + 8 * pulse) * p.t;
+  ctx.beginPath();
+  ctx.ellipse(p.x, p.y, r, r * 0.4, 0, 0, Math.PI * 2);
+  ctx.fillStyle = `rgba(255, 230, 90, ${0.12 + 0.15 * pulse})`;
+  ctx.fill();
+  ctx.strokeStyle = `rgba(255, 230, 90, ${0.55 + 0.4 * pulse})`;
+  ctx.lineWidth = 2.5;
+  ctx.stroke();
+  ctx.lineWidth = 1;
+}
+
 function drawShadow(wx, wy, wz, baseR) {
   const s = proj(wx, 0, wz);
   const size = Math.max(0.25, 1 - wy / 260);
@@ -567,6 +591,11 @@ function drawServeLabel() {
   ctx.font = 'bold 18px sans-serif';
   ctx.textAlign = 'center';
   ctx.fillText(serveSide === 'player' ? 'あなたのサーブ' : 'CPUのサーブ', W / 2, 92);
+  if (waitingServe) {
+    ctx.fillStyle = `rgba(255,255,255,${0.55 + 0.45 * Math.sin(tick * 0.1)})`;
+    ctx.font = '16px sans-serif';
+    ctx.fillText('press any key', W / 2, 118);
+  }
 }
 
 function drawTitle() {
@@ -597,6 +626,7 @@ function drawGameOver() {
 }
 
 function loop() {
+  tick++;
   update();
   draw();
   requestAnimationFrame(loop);
